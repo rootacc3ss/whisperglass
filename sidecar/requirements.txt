@@ -1,0 +1,14 @@
+# NOTE: torch is intentionally NOT listed — the Electron bootstrap installs
+# CPU-only torch first from https://download.pytorch.org/whl/cpu so that
+# whisperx's torch dependency resolves to the small CPU build instead of
+# pulling the multi-GB CUDA wheel.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+faster-whisper>=1.1.0,<2
+whisperx>=3.3.1,<4
+ctranslate2>=4.5.0,<5
+nvidia-cublas-cu12>=12.4
+nvidia-cudnn-cu12>=9.1
+huggingface_hub>=0.26
+tqdm>=4.66
+numpy>=1.26,<3

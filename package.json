@@ -1,0 +1,21 @@
+{
+    "name": "whisperglass",
+    "productName": "WhisperGlass",
+    "version": "0.1.0",
+    "description": "Transparent always-on-top speech-to-text overlay powered by faster-whisper and WhisperX",
+    "main": "src/index.js",
+    "scripts": {
+        "start": "electron .",
+        "test": "vitest run",
+        "sidecar:dev": "python3 sidecar/server.py --port 7345"
+    },
+    "author": {
+        "name": "rootacc3ss"
+    },
+    "license": "MIT",
+    "devDependencies": {
+        "electron": "^44.4.5",
+        "jsdom": "^30.1.1",
+        "vitest": "^5.0.2"
+    }
+}

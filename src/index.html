@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <meta
+            http-equiv="content-security-policy"
+            content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' blob: data:; worker-src 'self' blob:"
+        />
+        <title>WhisperGlass</title>
+        <style>
+            :root {
+                --text-color: #e5e5e7;
+                --text-dim: rgba(229, 229, 231, 0.55);
+                --border-color: rgba(255, 255, 255, 0.14);
+                --header-background: rgba(0, 0, 0, 0.82);
+                --main-content-background: rgba(0, 0, 0, 0.82);
+                --button-background: rgba(0, 0, 0, 0.5);
+                --button-border: rgba(255, 255, 255, 0.1);
+                --hover-background: rgba(255, 255, 255, 0.1);
+                --input-background: rgba(0, 0, 0, 0.35);
+                --placeholder-color: rgba(255, 255, 255, 0.4);
+                --accent: #007aff;
+                --accent-dim: rgba(0, 122, 255, 0.25);
+                --success: #34d399;
+                --danger: #ef4444;
+                --warning: #fbbf24;
+                --card-background: rgba(255, 255, 255, 0.04);
+                --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+                --border-radius: 10px;
+                --font: 'Inter', -apple-system, 'Segoe UI', 'Cantarell', sans-serif;
+                --mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Ubuntu Mono', monospace;
+                --response-font-size: 19px;
+                --radius-window: 7px;
+                --radius-card: 10px;
+                --radius-btn: 8px;
+                --radius-chip: 4px;
+            }
+            :root.compact-layout {
+                --radius-window: 5px;
+                --radius-card: 6px;
+                --response-font-size: 16px;
+            }
+            * {
+                box-sizing: border-box;
+            }
+            html,
+            body {
+                margin: 0;
+                padding: 0;
+                height: 100%;
+                overflow: hidden;
+                background: transparent;
+            }
+            body {
+                font-family: var(--font);
+                color: var(--text-color);
+                font-size: 14px;
+                -webkit-font-smoothing: antialiased;
+                user-select: none;
+                cursor: default;
+            }
+            ::-webkit-scrollbar {
+                width: 6px;
+                height: 6px;
+            }
+            ::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            ::-webkit-scrollbar-thumb {
+                background: var(--scrollbar-thumb);
+                border-radius: 3px;
+            }
+            ::-webkit-scrollbar-thumb:hover {
+                background: rgba(255, 255, 255, 0.32);
+            }
+            input,
+            textarea,
+            select,
+            button {
+                font-family: inherit;
+            }
+            ::selection {
+                background: rgba(0, 122, 255, 0.35);
+            }
+        </style>
+    </head>
+    <body>
+        <script type="module" src="components/app/WhisperGlassApp.js"></script>
+        <whisper-glass-app id="app"></whisper-glass-app>
+    </body>
+</html>

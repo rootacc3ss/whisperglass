@@ -1,0 +1,29 @@
+# dependencies / build output
+node_modules/
+.vite/
+dist/
+out/
+build/
+coverage/
+
+# internal docs & local reference material (not for the public repo)
+docs/
+archive/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# logs & temp
+*.log
+*.pid
+*.tmp
+*.wav
+nohup.out
+
+# env & OS
+.env
+.env.*
+.DS_Store
