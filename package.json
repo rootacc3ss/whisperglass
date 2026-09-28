@@ -7,15 +7,54 @@
     "scripts": {
         "start": "electron .",
         "test": "vitest run",
-        "sidecar:dev": "python3 sidecar/server.py --port 7345"
+        "sidecar:dev": "python3 sidecar/server.py --port 7345",
+        "dist": "electron-builder --linux AppImage rpm deb",
+        "dist:appimage": "electron-builder --linux AppImage",
+        "dist:rpm": "electron-builder --linux rpm",
+        "dist:deb": "electron-builder --linux deb"
     },
     "author": {
         "name": "rootacc3ss"
     },
     "license": "MIT",
+    "desktopName": "whisperglass.desktop",
     "devDependencies": {
         "electron": "^44.4.5",
+        "electron-builder": "^26.15.3",
         "jsdom": "^30.1.1",
         "vitest": "^5.0.2"
+    },
+    "build": {
+        "appId": "io.github.rootacc3ss.whisperglass",
+        "productName": "WhisperGlass",
+        "directories": {
+            "output": "dist"
+        },
+        "files": [
+            "src/**/*",
+            "package.json",
+            "!tests/**",
+            "!scripts/**",
+            "!docs/**",
+            "!sidecar/**"
+        ],
+        "extraResources": [
+            {
+                "from": "sidecar",
+                "to": "sidecar",
+                "filter": ["**/*", "!__pycache__/**", "!README.md"]
+            }
+        ],
+        "linux": {
+            "target": ["AppImage", "rpm", "deb"],
+            "category": "Utility",
+            "icon": "src/assets/icon.png",
+            "maintainer": "rootacc3ss",
+            "description": "Transparent always-on-top speech-to-text overlay powered by faster-whisper and WhisperX",
+            "synopsis": "Local speech-to-text overlay"
+        },
+        "deb": {
+            "depends": ["libc6", "libgtk-3-0", "libnss3", "libasound2", "libgbm1"]
+        }
     }
 }
