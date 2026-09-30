@@ -51,6 +51,7 @@ class SettingsView extends LitElement {
         _testing: { state: true },
         _testLevel: { state: true },
         _testLabel: { state: true },
+        _aiTestBusy: { state: true },
     };
 
     constructor() {
@@ -63,7 +64,7 @@ class SettingsView extends LitElement {
         this.backendLog = [];
         this._capturing = null;
         this._captureHandler = null;
-        this._systemCombo = 'Alt+Shift+T';
+        this._systemCombos = { toggle: 'Alt+Shift+W', record: 'Alt+Shift+R' };
         this._sysBusy = false;
         this._devices = [];
         this._devicesLoading = false;
@@ -71,6 +72,7 @@ class SettingsView extends LitElement {
         this._testing = false;
         this._testLevel = 0;
         this._testLabel = '';
+        this._aiTestBusy = false;
         this._testRaf = 0;
         this._testStream = null;
         this._testCtx = null;
@@ -79,6 +81,7 @@ class SettingsView extends LitElement {
     disconnectedCallback() {
         super.disconnectedCallback();
         this._stopTestMic();
+        this._stopCapture();
     }
 
     firstUpdated() {
@@ -174,11 +177,6 @@ class SettingsView extends LitElement {
         this._testCtx = null;
     }
 
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        this._stopCapture();
-    }
-
     _patch(patch) {
         this.dispatchEvent(new CustomEvent('settings-patch', { detail: patch, bubbles: true, composed: true }));
     }
@@ -189,8 +187,9 @@ class SettingsView extends LitElement {
 
     _startCapture(action) {
         this._stopCapture();
-        if (action === 'systemToggle') {
-            this._capturing = 'systemToggle';
+        if (action.startsWith('system:')) {
+            const sysAction = action.slice('system:'.length);
+            this._capturing = action;
             this._captureHandler = (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -210,13 +209,13 @@ class SettingsView extends LitElement {
                 parts.push(key);
                 const accelerator = parts.join('+');
                 if (!['Alt', 'Ctrl', 'Shift', 'Super'].includes(key)) {
-                    const conflict = Object.values(this.settings?.keybinds || {}).some((acc) => acc === accelerator);
-                    if (conflict) {
-                        toast('That combo is already used by another action', 'error');
+                    const other = sysAction === 'toggle' ? 'record' : 'toggle';
+                    if (this._systemCombos[other] === accelerator) {
+                        toast('That combo is already used by the other system keybind', 'error');
                         return;
                     }
                 }
-                this._systemCombo = accelerator;
+                this._systemCombos = { ...this._systemCombos, [sysAction]: accelerator };
                 this._stopCapture();
             };
             window.addEventListener('keydown', this._captureHandler, true);
@@ -262,17 +261,18 @@ class SettingsView extends LitElement {
         this._capturing = null;
     }
 
-    async _installSystemKeybind() {
+    async _installSystemKeybind(action) {
         this._sysBusy = true;
-        const res = await window.wg.invoke('wg:keybinds:install-system', { combo: this._systemCombo });
+        const combo = this._systemCombos[action] || (action === 'record' ? 'Alt+Shift+R' : 'Alt+Shift+W');
+        const res = await window.wg.invoke('wg:keybinds:install-system', { action, combo });
         this._sysBusy = false;
-        if (res && res.ok) toast(`System keybind installed — ${this._systemCombo}`, 'success');
-        else toast(`Install failed: ${res?.error || 'unknown error'}`, 'error', 6000);
+        if (res && res.ok) toast(`System keybind installed — ${combo}`, 'success');
+        else toast(`Install failed: ${res?.error || 'unknown error'}`, 'error', 8000);
     }
 
-    async _uninstallSystemKeybind() {
+    async _uninstallSystemKeybind(action) {
         this._sysBusy = true;
-        await window.wg.invoke('wg:keybinds:uninstall-system');
+        await window.wg.invoke('wg:keybinds:uninstall-system', { action });
         this._sysBusy = false;
         toast('System keybind removed', 'info');
     }
@@ -946,34 +946,111 @@ class SettingsView extends LitElement {
                     <div class="note"><button class="btn" @click=${() => this._patch({ keybinds: { ...DEFAULT_KEYBINDS } })}>Reset all keybinds</button></div>
                     <div class="divider"></div>
                     <div class="setting" style="display:block">
-                        <span class="label">System keybind (recommended on GNOME Wayland)</span>
-                        <span class="sub">Compositor-level toggle — fires even when another app has focus (the in-app grab cannot)</span>
+                        <span class="label">System keybinds (recommended on GNOME Wayland)</span>
+                        <span class="sub">Compositor-level — fire even when another app has focus (the in-app grabs cannot on Wayland)</span>
                         ${this.keybindInfo?.gnome
                             ? html`
-                                  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
-                                      <div
-                                          class="kbd ${this._capturing === 'systemToggle' ? 'capturing' : ''}"
-                                          @click=${() =>
-                                              this._capturing === 'systemToggle'
-                                                  ? this._stopCapture()
-                                                  : this._startCapture('systemToggle')}
-                                      >
-                                          ${this._capturing === 'systemToggle' ? 'press keys…' : this._systemCombo}
-                                      </div>
-                                      ${this.keybindInfo?.installed
-                                          ? html`<span class="tag ok">Installed</span>
-                                                <button class="btn" ?disabled=${this._sysBusy} @click=${() => this._uninstallSystemKeybind()}>Remove</button>`
-                                          : html`<button class="btn" ?disabled=${this._sysBusy} @click=${() => this._installSystemKeybind()}>
-                                                <wg-icon name="download" size="12"></wg-icon> Install
-                                            </button>`}
-                                  </div>
-                                  ${this.keybindInfo?.installed
-                                      ? html`<div class="note" style="color:var(--success)">Active — the in-app "Show / hide" grab is disabled while this is installed.</div>`
-                                      : html`<div class="note">Runs a tiny launcher (~/.local/bin/whisperglass-toggle) registered via gsettings. Your other custom keybindings are preserved.</div>`}
+                                  ${[
+                                      ['toggle', 'Show / hide window', 'Alt+Shift+W'],
+                                      ['record', 'Start / stop recording', 'Alt+Shift+R'],
+                                  ].map(([action, label, fallback]) => {
+                                      const b = this.keybindInfo?.bindings?.[action] || {};
+                                      return html`
+                                          <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
+                                              <span class="label" style="min-width:150px">${label}</span>
+                                              <div
+                                                  class="kbd ${this._capturing === `system:${action}` ? 'capturing' : ''} ${b.conflicted ? 'conflict' : ''}"
+                                                  @click=${() =>
+                                                      this._capturing === `system:${action}`
+                                                          ? this._stopCapture()
+                                                          : this._startCapture(`system:${action}`)}
+                                              >
+                                                  ${this._capturing === `system:${action}`
+                                                      ? 'press keys…'
+                                                      : this._systemCombos[action] || b.combo || fallback}
+                                              </div>
+                                              ${b.installed
+                                                  ? html`<span class="tag ok">Installed</span>
+                                                        <button class="btn" ?disabled=${this._sysBusy} @click=${() => this._uninstallSystemKeybind(action)}>Remove</button>`
+                                                  : html`<button class="btn" ?disabled=${this._sysBusy} @click=${() => this._installSystemKeybind(action)}>
+                                                        <wg-icon name="download" size="12"></wg-icon> Install
+                                                    </button>`}
+                                              ${b.installed && !b.scriptOk
+                                                  ? html`<span class="tag" style="color:var(--danger)">launcher missing</span>`
+                                                  : ''}
+                                          </div>
+                                      `;
+                                  })}
+                                  ${(this.keybindInfo?.conflicts || []).length
+                                      ? html`<div class="note" style="color:var(--danger)">
+                                            Conflict: another binding owns the same combo —
+                                            ${(this.keybindInfo.conflicts || [])
+                                                .map((c) => html`${c.name || 'another app'} (<code>${c.command || c.dir}</code>)`)
+                                                .join(', ')}.
+                                            Change the combo above or remove the other binding in your desktop's keyboard settings.
+                                        </div>`
+                                      : ''}
+                                  <div class="note">Runs tiny launchers (~/.local/bin/whisperglass-*) registered via gsettings. Your other custom keybindings are preserved.</div>
                                   ${this.keybindInfo?.error ? html`<div class="note" style="color:var(--danger)">${this.keybindInfo.error}</div>` : ''}
                               `
-                            : html`<div class="note">Not on GNOME — you can set a shortcut manually in your desktop settings that runs the app with <code>--toggle</code> (see README → System keybind).</div>`}
+                            : html`<div class="note">Not on GNOME — you can set shortcuts manually in your desktop settings that run the app with <code>--toggle</code> / <code>--record</code> (see README → System keybind).</div>`}
                     </div>
+                </div>
+
+                <div class="card">
+                    <div class="section-title">AI Assist</div>
+                    ${this._switchRow(
+                        'Enable AI actions',
+                        'OpenAI-compatible endpoint (OpenAI, LM Studio, Ollama…) — used for improve / summarize / custom prompts',
+                        s.aiAssist.enabled,
+                        (v) => this._patch({ aiAssist: { enabled: v } })
+                    )}
+                    ${s.aiAssist.enabled
+                        ? html`
+                              <div class="setting">
+                                  <div><span class="label">Endpoint URL</span><span class="sub">e.g. https://api.openai.com/v1 or http://localhost:1234/v1</span></div>
+                                  <input
+                                      type="text"
+                                      style="min-width:200px"
+                                      placeholder="https://api.openai.com/v1"
+                                      .value=${s.aiAssist.baseUrl}
+                                      @change=${(e) => this._patch({ aiAssist: { baseUrl: e.target.value.trim() } })}
+                                  />
+                              </div>
+                              <div class="setting">
+                                  <div><span class="label">API key</span><span class="sub">Stored locally in settings.json — leave empty for local servers</span></div>
+                                  <input
+                                      type="password"
+                                      style="min-width:170px"
+                                      placeholder="sk-…"
+                                      .value=${s.aiAssist.apiKey}
+                                      @change=${(e) => this._patch({ aiAssist: { apiKey: e.target.value.trim() } })}
+                                  />
+                              </div>
+                              <div class="setting">
+                                  <div><span class="label">Model ID</span><span class="sub">e.g. gpt-4o-mini, llama-3.1-8b… (must match the endpoint)</span></div>
+                                  <input
+                                      type="text"
+                                      style="min-width:170px"
+                                      placeholder="gpt-4o-mini"
+                                      .value=${s.aiAssist.model}
+                                      @change=${(e) => this._patch({ aiAssist: { model: e.target.value.trim() } })}
+                                  />
+                              </div>
+                              ${this._switchRow(
+                                  'Auto-refine on transcription',
+                                  'Runs "improve clarity" automatically after each transcription — result lands as an AI OUTPUT entry below it',
+                                  s.aiAssist.autoRefine,
+                                  (v) => this._patch({ aiAssist: { autoRefine: v } })
+                              )}
+                              <div class="row" style="margin-top:8px">
+                                  <button class="btn" ?disabled=${this._aiTestBusy} @click=${() => this._testAi()}>
+                                      <wg-icon name="refresh-cw" size="12" class=${this._aiTestBusy ? 'spin-icon' : ''}></wg-icon>
+                                      Test connection
+                                  </button>
+                              </div>
+                          `
+                        : ''}
                 </div>
 
                 <div class="card">
@@ -1083,6 +1160,18 @@ class SettingsView extends LitElement {
                 </div>
             </div>
         `;
+    }
+
+    async _testAi() {
+        this._aiTestBusy = true;
+        try {
+            const res = await window.wg.invoke('wg:ai:test');
+            if (res && res.ok) toast('AI endpoint reachable', 'success');
+            else toast(`AI test failed: ${res?.error || 'unknown error'}`, 'error', 7000);
+        } catch (err) {
+            toast(`AI test failed: ${err?.message || err}`, 'error', 7000);
+        }
+        this._aiTestBusy = false;
     }
 
     async _deleteModel(key, btn) {

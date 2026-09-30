@@ -1,0 +1,93 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+html,
+body {
+    background: transparent;
+    overflow: hidden;
+    height: 100%;
+}
+body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: pointer;
+}
+.pill {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    background: rgba(18, 18, 22, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    padding: 0 18px;
+    height: 42px;
+    max-width: 320px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(12px);
+}
+.icon {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+}
+.icon.rec {
+    background: #ff453a;
+    animation: pulse 1.4s ease infinite;
+}
+.icon.busy {
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #007aff;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+.icon.ok {
+    background: #34d399;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    background: #34d399;
+    clip-path: polygon(14% 44%, 0 65%, 40% 100%, 100% 16%, 80% 0%, 38% 62%);
+}
+.icon.err {
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: #fbbf24;
+    clip-path: polygon(45% 0, 55% 0, 55% 55%, 45% 55%, 45% 0, 45% 45%, 100% 45%, 100% 55%, 45% 55%, 45% 100%, 55% 100%, 55% 55%, 100% 55%, 100% 45%, 55% 45%, 55% 0);
+}
+.label {
+    font-size: 12.5px;
+    color: #eee;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.timer {
+    font-size: 12px;
+    color: #999;
+    font-variant-numeric: tabular-nums;
+    flex: none;
+}
+@keyframes pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.35;
+    }
+}
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

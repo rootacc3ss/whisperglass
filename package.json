@@ -1,7 +1,7 @@
 {
     "name": "whisperglass",
     "productName": "WhisperGlass",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Transparent always-on-top speech-to-text overlay powered by faster-whisper and WhisperX",
     "main": "src/index.js",
     "scripts": {

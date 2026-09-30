@@ -12,6 +12,7 @@ const DEFAULT_KEYBINDS = {
     moveLeft: 'Ctrl+Alt+ArrowLeft',
     moveRight: 'Ctrl+Alt+ArrowRight',
     systemKeybind: false,
+    systemRecord: false,
 };
 
 function normalizeAccelerator(acc) {

@@ -31,6 +31,7 @@ On first launch the onboarding view walks you through:
 | `Ctrl+Shift+Space` | Start / stop recording (stop = transcribe) |
 | `Ctrl+\` | Hide / show the window |
 | `Alt+Shift+T` | Hide / show — **system keybind** (install from Settings → Keybinds; recommended on GNOME Wayland) |
+| `Alt+Shift+W` / `Alt+Shift+R` | System keybinds (GNOME): hide/show window · start/stop recording |
 | `Ctrl+Shift+N` | New session |
 | `Ctrl+Shift+B` | Toggle sessions panel |
 | `Escape` | Discard recording / exit edit or settings |
@@ -67,11 +68,12 @@ restore paths:
 
 1. **Tray icon** (top bar menu: Show / Record / New session / Settings / Quit) —
    needs the AppIndicator extension on GNOME (Settings → Appearance can disable it)
-2. **System keybind** — Settings → Keybinds → Install (GNOME, one click). Registers a
-   compositor-level keybind (`Alt+Shift+T` by default, changeable) that fires even
-   when another app has focus — the in-app grab can't do that on Wayland. Existing
-   custom keybindings are preserved. The installer writes a tiny launcher to
-   `~/.local/bin/whisperglass-toggle`.
+2. **System keybinds** — Settings → Keybinds → Install (GNOME, one click). Registers
+   compositor-level keybinds (`Alt+Shift+W` hide/show, `Alt+Shift+R` record by default,
+   changeable) that fire even when another app has focus — the in-app grab can't do that
+   on Wayland. Existing custom keybindings are preserved, and conflicting bindings from
+   other apps are detected and surfaced instead of silently failing. The installer writes
+   tiny launchers to `~/.local/bin/whisperglass-*`.
 3. **CLI relay** — run the app with `--toggle`, `--show`, `--hide`, or `--record`;
    the command is forwarded to the running instance (works from terminals, docks,
    scripts, other DEs' shortcut settings).
@@ -92,6 +94,30 @@ deliberately CPU-only (VAD/alignment don't need VRAM), which keeps the install ~
 lighter. If GPU memory runs out mid-transcription you'll get a clear error — switch to
 `int8` compute or a smaller model in settings.
 
+## AI assist
+
+Settings → AI Assist: point WhisperGlass at any **OpenAI-compatible** endpoint
+(OpenAI, LM Studio, Ollama, anything speaking `/v1/chat/completions`) with an API
+key and model ID. Then every transcript gets a ✨ button:
+
+- **Improve clarity & readability** — strips uh/um, stutters and false starts; same
+  language, no new content
+- **Summarize** — keeps core details
+- **Custom prompt** — free-form instruction
+
+Outputs land as **AI OUTPUT** entries in the chat directly below their source
+transcript, with prior entries sent as context. "Auto-refine on transcription"
+runs *improve* automatically after every recording. Nothing is sent anywhere except
+your chosen endpoint.
+
+## Audio archive
+
+Settings → Behavior → **Keep audio files**: recordings are archived per-session at
+`~/.local/share/whisperglass/audio/<session>/<entry>.wav` and linked to their entry —
+a ▶ button on each entry opens a player, with karaoke-style word highlighting synced
+to the timestamps when WhisperX alignment data exists. Deleting an entry (or session)
+deletes its audio.
+
 ## Files
 
 ```
@@ -109,7 +135,12 @@ lighter. If GPU memory runs out mid-transcription you'll get a clear error — s
 - **Wayland**: runs via XWayland automatically (transparent + always-on-top are
   reliable there). Native Wayland is an experimental toggle in Settings → Appearance
   (needs restart). In-app global shortcuts can't fire while a native Wayland window
-  has focus — install the system keybind (above) for a toggle that works everywhere.
+  has focus — install the system keybinds (above) for toggle + record that work
+  everywhere, even with the window hidden.
+- **Recording while hidden**: start a recording from the system record keybind, the
+  tray, or the CLI relay — a tiny status pill appears top-center (recording ·
+  transcribing · copied-to-clipboard) even when the overlay is hidden, then fades.
+  Click it to bring the overlay back.
 - **Tray icon missing on GNOME?** Enable the "AppIndicator and KStatusNotifierItem
   Support" extension (`gnome-extensions enable
   appindicatorsupport@rgcjonas.gmail.com`).

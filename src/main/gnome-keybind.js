@@ -5,9 +5,31 @@ const path = require('path');
 
 const MEDIA_SCHEMA = 'org.gnome.settings-daemon.plugins.media-keys';
 const CUSTOM_SCHEMA = 'org.gnome.settings-daemon.plugins.media-keys.custom-keybinding';
-const KB_DIR = '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/whisperglass-toggle';
-const KB_SCHEMA_PATH = `${CUSTOM_SCHEMA}:${KB_DIR}/`;
-const SCRIPT_PATH = path.join(os.homedir(), '.local', 'bin', 'whisperglass-toggle');
+const KB_ROOT = '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings';
+
+// Named system keybinds. Each gets its own dconf path + launcher script.
+const BINDINGS = {
+    toggle: { dir: 'whisperglass-toggle', name: 'WhisperGlass Toggle', arg: '--toggle' },
+    record: { dir: 'whisperglass-record', name: 'WhisperGlass Record', arg: '--record' },
+};
+
+const ACTIONS = Object.keys(BINDINGS);
+
+// Valid terminal keys in a gsettings accelerator (after comboToGsettings).
+const KEY_RE =
+    '([a-z0-9]|space|return|esc(?:ape)?|tab|backspace|delete|home|end|pgup|pgdn|insert|up|down|left|right|print|pause|f[0-9]|f1[0-2])';
+
+function scriptPath(action) {
+    return path.join(os.homedir(), '.local', 'bin', BINDINGS[action].dir);
+}
+
+function kbDir(action) {
+    return `${KB_ROOT}/${BINDINGS[action].dir}`;
+}
+
+function kbSchemaPath(action) {
+    return `${CUSTOM_SCHEMA}:${kbDir(action)}/`;
+}
 
 function run(cmd, args) {
     return new Promise((resolve, reject) => {
@@ -18,6 +40,8 @@ function run(cmd, args) {
     });
 }
 
+// Map an app-style combo ("Ctrl+Shift+Space") to a gsettings accelerator
+// ("<ctrl><shift>space"). Keys pass through lowercased; a few need renaming.
 function comboToGsettings(combo) {
     return String(combo || '')
         .split('+')
@@ -28,9 +52,26 @@ function comboToGsettings(combo) {
             if (lower === 'alt') return '<alt>';
             if (lower === 'shift') return '<shift>';
             if (lower === 'super' || lower === 'win' || lower === 'meta') return '<super>';
+            if (lower === 'enter') return 'return';
+            if (lower === 'pgup') return 'pgup';
+            if (lower === 'pgdn') return 'pgdn';
+            if (lower === 'esc') return 'escape';
             return lower;
         })
         .join('');
+}
+
+// Normalize a gsettings accelerator for comparison: lowercase, <control> → <ctrl>.
+function normalizeBinding(binding) {
+    return String(binding || '')
+        .trim()
+        .replace(/^'|'$/g, '')
+        .toLowerCase()
+        .replace(/<control>/g, '<ctrl>');
+}
+
+function isValidBinding(binding) {
+    return new RegExp(`^(<ctrl>|<alt>|<shift>|<super>)*${KEY_RE}$`).test(binding);
 }
 
 function parseGvariantArray(text) {
@@ -63,61 +104,141 @@ async function getBindings() {
     return parseGvariantArray(out);
 }
 
-function launcherScript(execPath, appPath) {
-    return appPath ? `#!/bin/sh\nexec "${execPath}" "${appPath}" --toggle\n` : `#!/bin/sh\nexec "${execPath}" --toggle\n`;
+async function setBindings(dirs) {
+    await run('gsettings', ['set', MEDIA_SCHEMA, 'custom-keybindings', `[${dirs.map((b) => `'${b}'`).join(', ')}]`]);
 }
 
-async function install({ combo, execPath, appPath, packaged }) {
-    const binding = comboToGsettings(combo);
-    if (!/^(<ctrl>|<alt>|<shift>|<super>)*[a-z0-9]$/.test(binding)) {
-        throw new Error('Combo must end with a plain key (letter or digit)');
-    }
-    const binDir = path.dirname(SCRIPT_PATH);
-    fs.mkdirSync(binDir, { recursive: true });
-    const script = launcherScript(execPath, packaged ? null : appPath);
-    fs.writeFileSync(SCRIPT_PATH, script, { mode: 0o755 });
-    fs.chmodSync(SCRIPT_PATH, 0o755);
-
-    const bindings = await getBindings();
-    if (!bindings.includes(`${KB_DIR}/`)) {
-        bindings.push(`${KB_DIR}/`);
-        await run('gsettings', ['set', MEDIA_SCHEMA, 'custom-keybindings', `[${bindings.map((b) => `'${b}'`).join(', ')}]`]);
-    }
-    await run('gsettings', ['set', KB_SCHEMA_PATH, 'name', 'WhisperGlass Toggle']);
-    await run('gsettings', ['set', KB_SCHEMA_PATH, 'command', SCRIPT_PATH]);
-    await run('gsettings', ['set', KB_SCHEMA_PATH, 'binding', binding]);
-    return { script: SCRIPT_PATH, binding };
+function launcherScript(execPath, appPath, arg) {
+    return appPath
+        ? `#!/bin/sh\nexec "${execPath}" "${appPath}" ${arg}\n`
+        : `#!/bin/sh\nexec "${execPath}" ${arg}\n`;
 }
 
-async function uninstall() {
-    try {
-        const bindings = await getBindings();
-        const kept = bindings.filter((b) => b !== `${KB_DIR}/`);
-        if (kept.length !== bindings.length) {
-            await run('gsettings', ['set', MEDIA_SCHEMA, 'custom-keybindings', `[${kept.map((b) => `'${b}'`).join(', ')}]`]);
-        }
-    } catch {}
-    for (const key of ['name', 'command', 'binding']) {
+// Enumerate every registered custom keybinding (any dir) with its name/command/binding.
+async function enumerateAll(oursDirs) {
+    const dirs = (await getBindings()).filter(Boolean);
+    const out = [];
+    for (const dir of dirs) {
+        const schema = `${CUSTOM_SCHEMA}:${dir.replace(/\/+$/, '')}/`;
         try {
-            await run('gsettings', ['reset', KB_SCHEMA_PATH, key]);
+            const [name, command, binding] = await Promise.all([
+                run('gsettings', ['get', schema, 'name']).catch(() => ''),
+                run('gsettings', ['get', schema, 'command']).catch(() => ''),
+                run('gsettings', ['get', schema, 'binding']).catch(() => ''),
+            ]);
+            const isOurs = oursDirs.some((d) => d.replace(/\/+$/, '') === dir.replace(/\/+$/, ''));
+            out.push({
+                dir,
+                name: name.replace(/^'|'$/g, ''),
+                command: command.replace(/^'|'$/g, ''),
+                binding: normalizeBinding(binding),
+                ours: isOurs,
+            });
         } catch {}
     }
+    return out;
+}
+
+// Find other apps' bindings that own the same accelerator as one of ours —
+// GNOME resolves duplicate accelerators by array order, so a shadowed binding
+// silently never fires. Surface it instead.
+async function scanConflicts(action, combo) {
+    const ourDir = `${kbDir(action)}`;
+    const all = await enumerateAll([ourDir]);
+    const want = normalizeBinding(comboToGsettings(combo));
+    return all
+        .filter((b) => !b.ours && b.binding === want)
+        .map((b) => ({ name: b.name, command: b.command, binding: b.binding, dir: b.dir }));
+}
+
+async function install({ action, combo, execPath, appPath, packaged }) {
+    if (!BINDINGS[action]) throw new Error(`Unknown system keybind action: ${action}`);
+    const binding = comboToGsettings(combo);
+    if (!isValidBinding(binding)) {
+        throw new Error('Combo must end with a plain key (letter, digit, space, F-key…)');
+    }
+
+    const conflicts = await scanConflicts(action, combo).catch(() => []);
+    if (conflicts.length) {
+        const other = conflicts[0];
+        throw new Error(
+            `That combo is already registered by "${other.name || 'another app'}" (${other.command || 'unknown command'}) via GNOME custom keybindings. ` +
+                'Remove or change the other binding, or pick a different combo.'
+        );
+    }
+
+    const binDir = path.dirname(scriptPath(action));
+    fs.mkdirSync(binDir, { recursive: true });
+    const script = launcherScript(execPath, packaged ? null : appPath, BINDINGS[action].arg);
+    fs.writeFileSync(scriptPath(action), script, { mode: 0o755 });
+    fs.chmodSync(scriptPath(action), 0o755);
+
+    const bindings = await getBindings();
+    const entry = `${kbDir(action)}/`;
+    if (!bindings.includes(entry)) {
+        bindings.push(entry);
+        await setBindings(bindings);
+    }
+    await run('gsettings', ['set', kbSchemaPath(action), 'name', BINDINGS[action].name]);
+    await run('gsettings', ['set', kbSchemaPath(action), 'command', scriptPath(action)]);
+    await run('gsettings', ['set', kbSchemaPath(action), 'binding', binding]);
+    return { script: scriptPath(action), binding };
+}
+
+async function uninstall(action) {
+    if (action && !BINDINGS[action]) throw new Error(`Unknown system keybind action: ${action}`);
+    const actions = action ? [action] : ACTIONS;
     try {
-        fs.unlinkSync(SCRIPT_PATH);
+        const bindings = await getBindings();
+        const kept = bindings.filter((b) => !actions.some((a) => b === `${kbDir(a)}/`));
+        if (kept.length !== bindings.length) await setBindings(kept);
     } catch {}
+    for (const a of actions) {
+        for (const key of ['name', 'command', 'binding']) {
+            try {
+                await run('gsettings', ['reset', kbSchemaPath(a), key]);
+            } catch {}
+        }
+        try {
+            fs.unlinkSync(scriptPath(a));
+        } catch {}
+    }
     return { ok: true };
 }
 
 async function status() {
     const gnome = await isGnome();
-    const info = { gnome, installed: false, combo: '', scriptOk: false, error: '' };
-    if (!gnome) return info;
+    const info = { gnome, bindings: {}, conflicts: [], error: '' };
+    if (!gnome) {
+        for (const a of ACTIONS) info.bindings[a] = { installed: false, combo: '', scriptOk: false };
+        return info;
+    }
     try {
-        const bindings = await getBindings();
-        info.installed = bindings.includes(`${KB_DIR}/`);
-        if (info.installed) {
-            info.combo = await run('gsettings', ['get', KB_SCHEMA_PATH, 'binding']);
-            info.scriptOk = fs.existsSync(SCRIPT_PATH);
+        const all = await enumerateAll(ACTIONS.map((a) => kbDir(a)));
+        for (const a of ACTIONS) {
+            const mine = all.find((b) => b.ours && b.dir.replace(/\/+$/, '') === kbDir(a));
+            const installed = !!mine;
+            let scriptOk = false;
+            let combo = '';
+            if (installed) {
+                combo = mine.binding;
+                scriptOk = fs.existsSync(scriptPath(a));
+            }
+            info.bindings[a] = { installed, combo, scriptOk };
+        }
+        // conflicts: other apps shadowing any of our *installed* bindings
+        const oursInstalled = all.filter((b) => b.ours);
+        for (const mine of oursInstalled) {
+            for (const other of all) {
+                if (other.ours || other.binding !== mine.binding) continue;
+                const action = ACTIONS.find((a) => other && mine.dir.includes(BINDINGS[a].dir));
+                info.conflicts.push({
+                    action,
+                    name: other.name,
+                    command: other.command,
+                    binding: mine.binding,
+                });
+            }
         }
     } catch (err) {
         info.error = String(err.message || err);
@@ -125,4 +246,17 @@ async function status() {
     return info;
 }
 
-module.exports = { install, uninstall, status, isGnome, comboToGsettings, parseGvariantArray, SCRIPT_PATH };
+module.exports = {
+    install,
+    uninstall,
+    status,
+    isGnome,
+    scanConflicts,
+    comboToGsettings,
+    normalizeBinding,
+    isValidBinding,
+    parseGvariantArray,
+    ACTIONS,
+    BINDINGS,
+    scriptPath,
+};

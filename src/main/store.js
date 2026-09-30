@@ -23,6 +23,7 @@ function defaultSettings() {
         keepAudio: false,
         micDeviceId: '',
         micLabel: '',
+        aiAssist: { enabled: false, baseUrl: 'https://api.openai.com/v1', apiKey: '', model: '', autoRefine: false },
         liveTranscription: { enabled: false, model: '' },
         keybinds: { ...DEFAULT_KEYBINDS },
         appearance: {
@@ -184,9 +185,22 @@ class SessionStore {
         if (!session) return null;
         session.entries.push(entry);
         session.updatedAt = Date.now();
-        if (session.entries.length === 1 && session.title === 'New session') {
+        if (session.entries.length === 1 && session.title === 'New session' && entry.kind !== 'ai') {
             session.title = titleFromText(entry.text, session.createdAt);
         }
+        this._write(session);
+        return session;
+    }
+
+    // Insert an entry (e.g. an AI output) directly below another entry so
+    // chats stay conversational. Falls back to append if the anchor is gone.
+    insertEntryAfter(id, afterEntryId, entry) {
+        const session = this._read(id);
+        if (!session) return null;
+        const idx = session.entries.findIndex((e) => e.id === afterEntryId);
+        if (idx === -1) session.entries.push(entry);
+        else session.entries.splice(idx + 1, 0, entry);
+        session.updatedAt = Date.now();
         this._write(session);
         return session;
     }

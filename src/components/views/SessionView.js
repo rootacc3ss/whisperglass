@@ -21,6 +21,7 @@ class SessionView extends LitElement {
         _elapsed: { state: true },
         _busy: { state: true },
         _livePartial: { state: true },
+        _aiBusyId: { state: true },
     };
 
     constructor() {
@@ -37,6 +38,7 @@ class SessionView extends LitElement {
         this._deviceLabel = '';
         this._timer = null;
         this._unsubMic = null;
+        this._aiBusyId = null;
     }
 
     connectedCallback() {
@@ -114,6 +116,30 @@ class SessionView extends LitElement {
     _handleEntrySave(e) {
         const detail = e.detail;
         this.dispatchEvent(new CustomEvent('entry-save', { detail: { ...detail, sessionId: this.session?.id }, bubbles: true, composed: true }));
+    }
+
+    async _handleEntryAi(e) {
+        const detail = e.detail;
+        this._aiBusyId = detail.id;
+        try {
+            const res = await window.wg.invoke('wg:ai:run', { ...detail, sessionId: this.session?.id });
+            if (res && res.ok === false) toast(`AI failed: ${res.error || 'unknown error'}`, 'error', 7000);
+        } catch (err) {
+            toast(`AI failed: ${err?.message || err}`, 'error');
+        } finally {
+            this._aiBusyId = null;
+        }
+    }
+
+    async _handleEntryReveal(e) {
+        const { id } = e.detail || {};
+        if (!id) return;
+        await this.updateComplete;
+        const el = this.renderRoot.querySelector(`[data-eid="${CSS.escape ? CSS.escape(id) : id}"]`);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('flash');
+        setTimeout(() => el.classList.remove('flash'), 1600);
     }
 
     static styles = css`
@@ -398,17 +424,23 @@ class SessionView extends LitElement {
                     : entries.map(
                           (entry) => html`
                               <transcription-entry
-                                  .entry=${entry}
-                                  .animate=${entry.id === this.lastResultId}
-                                  @entry-save=${(e) => this._handleEntrySave(e)}
-                                  @entry-copy=${(e) =>
-                                      this.dispatchEvent(
-                                          new CustomEvent('entry-copy', { detail: e.detail, bubbles: true, composed: true })
-                                      )}
-                                  @entry-delete=${(e) =>
-                                      this.dispatchEvent(
-                                          new CustomEvent('entry-delete', { detail: e.detail, bubbles: true, composed: true })
-                                      )}
+                                data-eid=${entry.id}
+                                .entry=${entry}
+                                .animate=${entry.id === this.lastResultId}
+                                .aiEnabled=${!!this.settings?.aiAssist?.enabled}
+                                .aiBusy=${this._aiBusyId === entry.id}
+                                .audioSrc=${entry.audioFile ? `wg-audio:///${entry.audioFile}` : ''}
+                                @entry-save=${(e) => this._handleEntrySave(e)}
+                                @entry-ai=${(e) => this._handleEntryAi(e)}
+                                @entry-reveal=${(e) => this._handleEntryReveal(e)}
+                                @entry-copy=${(e) =>
+                                    this.dispatchEvent(
+                                        new CustomEvent('entry-copy', { detail: e.detail, bubbles: true, composed: true })
+                                    )}
+                                @entry-delete=${(e) =>
+                                    this.dispatchEvent(
+                                        new CustomEvent('entry-delete', { detail: e.detail, bubbles: true, composed: true })
+                                    )}
                               ></transcription-entry>
                           `
                       )}

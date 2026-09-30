@@ -1,4 +1,5 @@
-const { app, ipcMain, clipboard, Notification, shell, dialog } = require('electron');
+const { app, ipcMain, clipboard, Notification, shell, dialog, protocol, net } = require('electron');
+const { pathToFileURL } = require('url');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -31,7 +32,15 @@ const { LiveTranscriber } = require('./main/live');
 const { SidecarManager } = require('./main/sidecar');
 const { Logger } = require('./main/logger');
 const { createTray } = require('./main/tray');
+const { StatusWindow } = require('./main/status-window');
+const ai = require('./main/ai');
 const gnomeKeybind = require('./main/gnome-keybind');
+
+// wg-audio:///<sessionId>/<file> serves archived session audio to the
+// renderer's <audio> player without opening the fs to the web layer.
+protocol.registerSchemesAsPrivileged([
+    { scheme: 'wg-audio', privileges: { bypassCSP: false, stream: true, supportFetchAPI: true } },
+]);
 
 const CLI_COMMANDS = ['--toggle', '--show', '--hide', '--record'];
 
@@ -75,9 +84,10 @@ let sidecar = null;
 let recorder = null;
 let keybinds = null;
 let trayHandle = null;
+let statusWin = null;
 let live = null;
 let logger = null;
-let keybindInfo = { gnome: false, installed: false, combo: '', scriptOk: false, error: '' };
+let keybindInfo = { gnome: false, bindings: {}, conflicts: [], error: '' };
 let activeSessionId = null;
 let onboarded = false;
 let catalog = [];
@@ -197,6 +207,7 @@ function applyKeybinds() {
     const s = settingsStore.get();
     const map = { ...s.keybinds };
     if (map.systemKeybind) delete map.toggleVisibility;
+    if (map.systemRecord) delete map.toggleRecording;
     keybinds.register(map);
 }
 
@@ -233,7 +244,14 @@ async function refreshKeybindInfo() {
     try {
         keybindInfo = await gnomeKeybind.status();
     } catch {
-        keybindInfo = { gnome: false, installed: false, combo: '', scriptOk: false, error: '' };
+        keybindInfo = { gnome: false, bindings: {}, conflicts: [], error: '' };
+    }
+    if (keybindInfo.conflicts && keybindInfo.conflicts.length) {
+        log('keybinds').warn(
+            `system keybind conflict: ${keybindInfo.conflicts
+                .map((c) => `${c.name || c.dir} shadows ${c.binding}`)
+                .join('; ')}`
+        );
     }
     broadcastState();
 }
@@ -261,6 +279,7 @@ function notify(body) {
 async function transcribeFlow(file, durationSec) {
     if (!sidecar.ready) {
         broadcast('wg:transcribe:error', { message: 'Backend is not ready yet.', kind: 'internal' });
+        if (statusWin) statusWin.update('error', { text: 'Backend not ready' }, { dismissMs: 3000 });
         try {
             fs.unlinkSync(file);
         } catch {}
@@ -301,6 +320,7 @@ async function transcribeFlow(file, durationSec) {
         try {
             fs.unlinkSync(file);
         } catch {}
+        if (statusWin) statusWin.update('error', { text: 'Transcription failed' }, { dismissMs: 3000 });
         return;
     }
     log('asr').info('transcribe result', {
@@ -319,6 +339,7 @@ async function transcribeFlow(file, durationSec) {
         try {
             fs.unlinkSync(file);
         } catch {}
+        if (statusWin) statusWin.update('error', { text: result.error || 'Transcription failed' }, { dismissMs: 3200 });
         return;
     }
 
@@ -336,6 +357,24 @@ async function transcribeFlow(file, durationSec) {
         words: result.words || [],
     };
     if (result.speakers && result.speakers.length) entry.speakers = result.speakers;
+
+    // keepAudio: archive the WAV next to the session and link it to the entry
+    if (s.keepAudio) {
+        try {
+            const sessAudioDir = path.join(paths.audioDir, session.id);
+            fs.mkdirSync(sessAudioDir, { recursive: true });
+            const dest = path.join(sessAudioDir, `${entry.id}.wav`);
+            fs.renameSync(file, dest);
+            entry.audioFile = `${session.id}/${entry.id}.wav`;
+            log('rec').info('audio archived', { file: entry.audioFile, bytes: fs.statSync(dest).size });
+        } catch (err) {
+            log('rec').warn('audio archive failed', { error: String(err.message || err) });
+            try {
+                fs.unlinkSync(file);
+            } catch {}
+        }
+    }
+
     const updated = sessionStore.appendEntry(session.id, entry);
 
     let copied = false;
@@ -344,7 +383,7 @@ async function transcribeFlow(file, durationSec) {
         copied = true;
         notify('Transcription copied to clipboard.');
     }
-    if (!s.keepAudio) {
+    if (!s.keepAudio && !entry.audioFile) {
         try {
             fs.unlinkSync(file);
         } catch {}
@@ -353,6 +392,13 @@ async function transcribeFlow(file, durationSec) {
     writeAppState();
     broadcastState();
     broadcast('wg:transcribe:result', { session: updated, entry, copied });
+    if (s.aiAssist && s.aiAssist.enabled && s.aiAssist.autoRefine && entry.text.trim()) {
+        log('ai').info('auto-refine triggered');
+        runAi('improve', session.id, entry.id).catch(() => {});
+    }
+    if (statusWin) {
+        statusWin.update('done', { copied, text: entry.text.trim() ? '' : 'No speech detected' }, { dismissMs: 2800 });
+    }
     if (!entry.text.trim() && durationSec > 2) {
         log('asr').info('no speech detected', { durationSec, device: entry.device });
         broadcast('wg:transcribe:error', {
@@ -384,12 +430,16 @@ function stopRecordingFlow() {
                 message: 'Recording too short — hold the key a moment longer.',
                 kind: 'no_speech',
             });
+            if (statusWin) statusWin.update('error', { text: 'Too short' }, { dismissMs: 2600 });
             return;
         }
         if (result.error) {
             broadcast('wg:transcribe:error', { message: result.error, kind: 'internal' });
+            if (statusWin) statusWin.update('error', { text: 'Recording failed' }, { dismissMs: 3000 });
             return;
         }
+        const s = settingsStore.get();
+        if (statusWin) statusWin.update('transcribing', { model: s.model });
         await transcribeFlow(result.file, result.durationSec);
     };
     finish();
@@ -404,11 +454,52 @@ function startRecordingFlow() {
     chunkLogCounter = 0;
     log('rec').info('start recording', { liveEnabled: live?.enabled });
     broadcast('wg:rec-started');
+    if (statusWin) statusWin.show('recording', {}, { dismissMs: 30 * 60000 });
     if (recordCapTimer) clearTimeout(recordCapTimer);
     recordCapTimer = setTimeout(() => {
         if (recorder.recording) stopRecordingFlow();
     }, 30 * 60000);
     return { ok: true };
+}
+
+async function runAi(action, sessionId, entryId, prompt) {
+    const settings = settingsStore.get();
+    const a = settings.aiAssist || {};
+    if (!a.enabled) return { ok: false, error: 'AI assist is off (Settings → AI Assist)' };
+    const session = sessionStore.get(sessionId);
+    if (!session) return { ok: false, error: 'Session not found' };
+    const source = (session.entries || []).find((e) => e.id === entryId);
+    if (!source) return { ok: false, error: 'Source entry not found' };
+    let messages;
+    try {
+        messages = ai.buildMessages(session.entries || [], entryId, action, prompt);
+    } catch (err) {
+        return { ok: false, error: String(err.message || err) };
+    }
+    const label = action === 'improve' ? 'improved' : action === 'summarize' ? 'summarized' : 'custom';
+    log('ai').info('ai run', { action, model: a.model, sourceChars: (source.text || '').length, sessionId });
+    try {
+        const text = await ai.runCompletion(a, messages);
+        const entry = {
+            id: require('node:crypto').randomUUID(),
+            kind: 'ai',
+            aiAction: label,
+            sourceEntryId: entryId,
+            text,
+            createdAt: Date.now(),
+            model: a.model,
+        };
+        const updated = sessionStore.insertEntryAfter(sessionId, entryId, entry);
+        activeSessionId = sessionId;
+        writeAppState();
+        broadcastState();
+        broadcast('wg:transcribe:result', { session: updated, entry, copied: false });
+        log('ai').info('ai result', { action, chars: text.length });
+        return { ok: true, entry };
+    } catch (err) {
+        log('ai').warn('ai failed', { action, error: String(err.message || err).slice(0, 300) });
+        return { ok: false, error: String(err.message || err) };
+    }
 }
 
 function registerIpc() {
@@ -465,15 +556,17 @@ function registerIpc() {
         return settings.keybinds;
     });
 
-    ipcMain.handle('wg:keybinds:install-system', async (_e, { combo }) => {
+    ipcMain.handle('wg:keybinds:install-system', async (_e, { action, combo }) => {
+        const which = action === 'record' ? 'record' : 'toggle';
         try {
             await gnomeKeybind.install({
-                combo: combo || 'Alt+Shift+T',
+                action: which,
+                combo: combo || (which === 'record' ? 'Alt+Shift+R' : 'Alt+Shift+W'),
                 execPath: process.execPath,
                 appPath: app.getAppPath(),
                 packaged: app.isPackaged,
             });
-            settingsStore.patch({ keybinds: { systemKeybind: true } });
+            settingsStore.patch({ keybinds: { [which === 'record' ? 'systemRecord' : 'systemKeybind']: true } });
             applyKeybinds();
             await refreshKeybindInfo();
             return { ok: true };
@@ -482,14 +575,28 @@ function registerIpc() {
         }
     });
 
-    ipcMain.handle('wg:keybinds:uninstall-system', async () => {
+    ipcMain.handle('wg:keybinds:uninstall-system', async (_e, { action } = {}) => {
+        const which = action === 'record' ? 'record' : action === 'toggle' ? 'toggle' : null;
         try {
-            await gnomeKeybind.uninstall();
+            await gnomeKeybind.uninstall(which || undefined);
         } catch {}
-        settingsStore.patch({ keybinds: { systemKeybind: false } });
+        if (which) settingsStore.patch({ keybinds: { [which === 'record' ? 'systemRecord' : 'systemKeybind']: false } });
+        else settingsStore.patch({ keybinds: { systemKeybind: false, systemRecord: false } });
         applyKeybinds();
         await refreshKeybindInfo();
         return { ok: true };
+    });
+
+    ipcMain.handle('wg:ai:run', (_e, p) => runAi(p?.action, p?.sessionId, p?.entryId, p?.prompt));
+
+    ipcMain.handle('wg:ai:test', async () => {
+        const a = settingsStore.get().aiAssist || {};
+        try {
+            await ai.testConnection(a);
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: String(err.message || err) };
+        }
     });
 
     ipcMain.handle('wg:session:new', () => {
@@ -511,6 +618,10 @@ function registerIpc() {
 
     ipcMain.handle('wg:session:delete', (_e, { id }) => {
         sessionStore.delete(id);
+        try {
+            const sessAudioDir = path.join(paths.audioDir, id);
+            if (fs.existsSync(sessAudioDir)) fs.rmSync(sessAudioDir, { recursive: true, force: true });
+        } catch {}
         if (activeSessionId === id) {
             const metas = sessionStore.list();
             activeSessionId = metas.length ? metas[0].id : null;
@@ -533,9 +644,16 @@ function registerIpc() {
     });
 
     ipcMain.handle('wg:session:entry:delete', (_e, { sessionId, entryId }) => {
-        const session = sessionStore.deleteEntry(sessionId, entryId);
+        const session = sessionStore.get(sessionId);
+        const entry = session && (session.entries || []).find((e) => e.id === entryId);
+        if (entry && entry.audioFile) {
+            try {
+                fs.unlinkSync(path.join(paths.audioDir, entry.audioFile));
+            } catch {}
+        }
+        const updated = sessionStore.deleteEntry(sessionId, entryId);
         broadcastState();
-        return session;
+        return updated;
     });
 
     ipcMain.handle('wg:rec:start', () => startRecordingFlow());
@@ -547,6 +665,7 @@ function registerIpc() {
         }
         recorder.cancel();
         if (live) live.stop();
+        if (statusWin) statusWin.hide();
         broadcast('wg:rec-cancelled');
         return { ok: true };
     });
@@ -665,6 +784,7 @@ if (!gotLock) {
 } else {
     app.on('second-instance', (_e, commandLine) => {
         const cmd = CLI_COMMANDS.find((c) => commandLine.includes(c));
+        log('main').info('second-instance command', { cmd: cmd || '(show)', argv: commandLine.slice(0, 8) });
         if (cmd) {
             handleCliCommand(cmd);
             return;
@@ -675,6 +795,14 @@ if (!gotLock) {
     app.whenReady().then(() => {
         paths = getPaths();
         ensureDirs(paths);
+
+        protocol.handle('wg-audio', (request) => {
+            const rel = decodeURIComponent(new URL(request.url).pathname.replace(/^\/+/, ''));
+            const clean = path.normalize(rel).replace(/^(\.\.(\/|\\|$))+/, '');
+            const file = path.join(paths.audioDir, clean);
+            if (!file.startsWith(paths.audioDir)) return new Response('Not found', { status: 404 });
+            return net.fetch(pathToFileURL(file).toString());
+        });
 
         settingsStore = new SettingsStore(paths.configDir);
         sessionStore = new SessionStore(paths.sessionsDir);
@@ -736,6 +864,10 @@ if (!gotLock) {
         sidecar.start();
 
         recorder = new Recorder(paths.audioDir);
+        statusWin = new StatusWindow({
+            onClick: () => showWindow(),
+            log: (line) => log('statuswin').debug(line),
+        });
         live = new LiveTranscriber({
             sidecar,
             recorder,
@@ -782,6 +914,7 @@ if (!gotLock) {
     app.on('before-quit', () => {
         if (healthTimer) clearInterval(healthTimer);
         if (recordCapTimer) clearTimeout(recordCapTimer);
+        if (statusWin) statusWin.destroy();
         try {
             keybinds.unregister();
         } catch {}
