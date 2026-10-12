@@ -1,3 +1,24 @@
+# **Disclaimer:**
+
+I, the dev "rootacc3ss" (hello!), didn't make this. *Like, at all.*
+
+I've not looked at the code. I've not even bothered to try patching issues manually.
+
+I am experimenting with my own AI agent -- which I did actually make, and use my "old school" hands-and-brain method of programming. It's within a software I am building to safely fully automate development, R&D, testing, etc of software. It's a WIP, and a sideproject.
+
+I am playing around with using low cost AI to automate the development of non-webbased softwares, and this is one of the projects which my agents are able to tamper with on command.
+
+***THAT BEING SAID, THIS CODE IS __NOT__ REVIEWED BY MYSELF, OR ANY OTHER HUMAN W/ PERTINENT DEVELOPMENT EXPERIENCE/CHOPS.*** 
+
+ik most stuff we use these days is pretty much also fully vibeshitted *(which, while I joke, how crazy is that..? I am getting old, and I did expect this reality, but not so soon)*...
+
+***THAT BEING SAID, RUN AT YOUR OWN RISK!***
+
+*thanx,*
+*RA*
+
+---
+
 # WhisperGlass
 
 A small, transparent, always-on-top speech-to-text overlay for Linux. Press a keybind,
