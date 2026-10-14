@@ -3,6 +3,7 @@ const { pathToFileURL } = require('url');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { relaunchOptions, keybindExecPath } = require('./main/relaunch');
 
 const earlySettings = (() => {
     try {
@@ -19,7 +20,7 @@ const wantsX11 =
     !(earlySettings.backend && earlySettings.backend.nativeWayland) &&
     !process.argv.includes('--ozone-platform=x11');
 if (wantsX11) {
-    app.relaunch({ args: [...process.argv.slice(1), '--ozone-platform=x11'] });
+    app.relaunch({ ...relaunchOptions([...process.argv.slice(1), '--ozone-platform=x11']) });
     app.exit(0);
 }
 
@@ -166,7 +167,7 @@ async function askRestartForLogging(verboseOn) {
     });
     if (result.response === 0) {
         log('main').info('restarting for logging change', { verboseOn });
-        app.relaunch({ args: process.argv.slice(1) });
+        app.relaunch(relaunchOptions(process.argv.slice(1)));
         app.exit(0);
     }
 }
@@ -562,7 +563,7 @@ function registerIpc() {
             await gnomeKeybind.install({
                 action: which,
                 combo: combo || (which === 'record' ? 'Alt+Shift+R' : 'Alt+Shift+W'),
-                execPath: process.execPath,
+                execPath: keybindExecPath(),
                 appPath: app.getAppPath(),
                 packaged: app.isPackaged,
             });
